@@ -190,6 +190,3 @@ Run:
 Notes:
 - This is a teaching/assignment prototype. File transfer uses base64 and sends entire file in one message (not chunked/resumable).
 - The broker and client are intentionally simple to keep the example readable.
-#   F a s t C h a t 
- 
- 
