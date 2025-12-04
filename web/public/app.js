@@ -602,6 +602,19 @@ function renderConversation(partner) {
     el.appendChild(p);
   });
   el.scrollTop = el.scrollHeight;
+  // enable Play X/O only if there is at least one message in this private conversation
+  try {
+    const btn = document.getElementById('convPlayXo');
+    if (btn) {
+      if (msgs && msgs.length > 0) {
+        btn.disabled = false;
+        btn.title = 'Play X/O';
+      } else {
+        btn.disabled = true;
+        btn.title = 'Play X/O (locked: send a message first)';
+      }
+    }
+  } catch(e) { /* ignore */ }
   // if there is an ongoing game for this conversation, show the board; otherwise clear game UI
   const area = document.getElementById('convGameArea')
   try {
@@ -668,6 +681,16 @@ const games = {} // key -> { state: 'challenged'|'playing', myMove, theirMove }
 
 function sendGameMessage(partner, action, data) {
   // use TEXT so broker will forward as MSG; encode as GAME::XO::ACTION::DATA
+  // Prevent initiating a CHALLENGE if there are no prior messages in the private conversation
+  if (action === 'CHALLENGE') {
+    try {
+      const key = getConvKey(myNick, partner)
+      const msgs = JSON.parse(sessionStorage.getItem(key) || '[]')
+      if (!msgs || msgs.length === 0) {
+        return alert('Tính năng chơi X/O chỉ mở khi bạn đã nhắn ít nhất 1 tin với người này.')
+      }
+    } catch(e) { /* ignore and allow */ }
+  }
   const payload = `GAME::XO::${action}${data ? '::'+data : ''}`
   console.log('[game] sendGameMessage to=', partner, 'payload=', payload)
   if (ws && ws.readyState === WebSocket.OPEN) {
