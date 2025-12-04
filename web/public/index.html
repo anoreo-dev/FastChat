@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FastChat Web</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- LOGIN -->
+  <div id="login" class="login-container">
+    <div class="login-card">
+      <div class="login-header">
+        <h1>FastChat</h1>
+        <p>Connect with others instantly</p>
+      </div>
+      <form id="loginForm" class="login-form" onsubmit="return false">
+        <div class="form-group">
+          <input id="nick" type="text" placeholder="Enter your nickname" required />
+        </div>
+        <button id="btnConnect" type="button" class="btn-primary">Start Chatting</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="app" class="hidden app-container">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="user-info">
+          <div class="user-avatar"></div>
+          <div id="me" class="user-name"></div>
+        </div>
+        <button id="end" class="btn-logout" title="End Session">✕</button>
+      </div>
+      <nav class="sidebar-nav">
+        <button id="tabUsers" class="nav-btn active" data-panel="users"><span class="icon">👥</span><span>Users</span></button>
+        <button id="tabInbox" class="nav-btn" data-panel="inbox"><span class="icon">📬</span><span>Inbox</span></button>
+        <button id="tabGroup" class="nav-btn" data-panel="group"><span class="icon">💬</span><span>Group</span></button>
+      </nav>
+      <div style="padding:8px; border-top:1px solid var(--border-color); font-size:12px; color:var(--text-secondary)">Tip: click "Chat" to open a private conversation</div>
+    </aside>
+
+    <main class="chat-main">
+      <!-- Users Panel -->
+      <section id="users" class="panel active">
+        <div class="panel-header"><h2>All Users</h2></div>
+        <div class="users-list"></div>
+      </section>
+
+      <!-- Inbox Panel -->
+      <section id="inbox" class="panel">
+        <div class="panel-header"><h2>Inbox</h2></div>
+        <div class="inbox-content" style="display:flex; gap:12px; height:calc(100vh - 120px);">
+          <div id="convList" style="width:30%; border-right:1px solid #eee; padding:8px; overflow:auto"></div>
+          <div id="convChat" style="flex:1; padding:12px; display:flex; flex-direction:column">
+            <div style="display:flex; align-items:center; justify-content:space-between">
+              <div id="convHeader" style="padding:8px 0; font-weight:600" data-partner=""></div>
+              <div>
+                <button id="convPlayXo" class="btn-send" title="Play X/O">🎮 Play X/O</button>
+              </div>
+            </div>
+            <div id="convGameArea" style="padding:6px 0"></div>
+            <div id="convMessages" class="messages" style="flex:1; overflow:auto; padding-right:8px"></div>
+            <div class="message-composer" style="margin-top:8px">
+              <input id="convText" placeholder="Gõ tin nhắn..." class="message-input" />
+              <label class="file-upload-btn"><input id="convFile" type="file" />📎</label>
+              <button id="sendConv" class="btn-send">Gửi</button>
+              <!-- removed camera sharing controls -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Group Chat Panel -->
+      <section id="group" class="panel">
+        <div class="panel-header"><h2>Group Chat</h2></div>
+        <div id="groupMessages" class="messages-container" style="height:calc(100vh - 160px); overflow:auto"></div>
+        <div class="message-composer">
+          <input id="groupText" type="text" placeholder="Gõ tin nhắn..." class="message-input" />
+          <label class="file-upload-btn"><input id="groupFile" type="file" />📎</label>
+          <button id="sendGroup" class="btn-send">Gửi</button>
+           </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+  <div id="notifications" style="position:fixed; right:12px; top:12px; z-index:9999"></div>
+</body>
+</html>

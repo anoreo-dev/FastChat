@@ -1,0 +1,13 @@
+{
+  "name": "fastchat-web-gateway",
+  "version": "0.1.0",
+  "description": "Web gateway for FastChat: bridges browser WebSocket to TCP broker",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0"
+  }
+}
