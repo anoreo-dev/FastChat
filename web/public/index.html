@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>FastChat Web</title>
   <link rel="stylesheet" href="style.css">
+    <!-- Modern UI font (Inter). If you prefer to ship the font locally, download Inter and
+      place it under web/public and update the link accordingly. -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
 </head>
 <body>
   <!-- LOGIN -->
@@ -28,31 +32,39 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="user-info">
-          <div class="user-avatar"></div>
+          <!-- user-avatar now prefers an image file `user.png` located in web/public.
+               If `user.png` is missing the CSS the style will fall back to the gradient avatar. -->
+          <div class="user-avatar" title="Your avatar"></div>
           <div id="me" class="user-name"></div>
         </div>
-        <button id="end" class="btn-logout" title="End Session">✕</button>
       </div>
       <nav class="sidebar-nav">
         <button id="tabUsers" class="nav-btn active" data-panel="users"><span class="icon">👥</span><span>Users</span></button>
         <button id="tabInbox" class="nav-btn" data-panel="inbox"><span class="icon">📬</span><span>Inbox</span></button>
         <button id="tabGroup" class="nav-btn" data-panel="group"><span class="icon">💬</span><span>Group</span></button>
       </nav>
-      <div style="padding:8px; border-top:1px solid var(--border-color); font-size:12px; color:var(--text-secondary)">Tip: click "Chat" to open a private conversation</div>
+      <!-- End session button moved to bottom -->
+      <div style="padding:8px; border-top:1px solid var(--border-color); font-size:12px; color:var(--text-secondary); text-align:center; margin-bottom:8px">Tip: click "Chat" to open a private conversation</div>
+      <button id="end" title="End Session"
+        style="width:100%; padding:8px 12px; margin:8px 0; border:none; background-color:#ff4d4f; color:white; font-weight:600; cursor:pointer;">
+        End Session
+      </button>
     </aside>
 
     <main class="chat-main">
       <!-- Users Panel -->
       <section id="users" class="panel active">
-        <div class="panel-header"><h2>All Users</h2></div>
+        <div class="panel-header"><h2>All Users (Server: Viet Nam)</h2></div>
+        <!-- Grid layout for 3 users per row -->
         <div class="users-list"></div>
       </section>
 
       <!-- Inbox Panel -->
       <section id="inbox" class="panel">
         <div class="panel-header"><h2>Inbox</h2></div>
+        <!-- Reduced width for conversation list from 30% to 20% -->
         <div class="inbox-content" style="display:flex; gap:12px; height:calc(100vh - 120px);">
-          <div id="convList" style="width:30%; border-right:1px solid #eee; padding:8px; overflow:auto"></div>
+          <div id="convList" style="width:20%; border-right:1px solid #eee; padding:8px; overflow:auto"></div>
           <div id="convChat" style="flex:1; padding:12px; display:flex; flex-direction:column">
             <div style="display:flex; align-items:center; justify-content:space-between">
               <div id="convHeader" style="padding:8px 0; font-weight:600" data-partner=""></div>
@@ -66,7 +78,6 @@
               <input id="convText" placeholder="Gõ tin nhắn..." class="message-input" />
               <label class="file-upload-btn"><input id="convFile" type="file" />📎</label>
               <button id="sendConv" class="btn-send">Gửi</button>
-              <!-- removed camera sharing controls -->
             </div>
           </div>
         </div>
@@ -80,7 +91,7 @@
           <input id="groupText" type="text" placeholder="Gõ tin nhắn..." class="message-input" />
           <label class="file-upload-btn"><input id="groupFile" type="file" />📎</label>
           <button id="sendGroup" class="btn-send">Gửi</button>
-           </div>
+         </div>
         </div>
       </section>
     </main>

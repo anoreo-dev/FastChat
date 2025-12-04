@@ -18,7 +18,8 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  /* Prefer Inter for a modern, neutral UI; fall back to system fonts. */
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   background: var(--bg-secondary);
   color: var(--text-primary);
   line-height: 1.5;
@@ -157,9 +158,12 @@ body {
 .user-avatar {
   width: 40px;
   height: 40px;
-  background: linear-gradient(135deg, var(--primary-color), #667eea);
+  /* Prefer a local user image named `user.png` placed inside web/public.
+     If missing, the gradient provides a pleasant fallback. */
+  background: url('user.png') center/cover no-repeat, linear-gradient(135deg, var(--primary-color), #667eea);
   border-radius: 50%;
   flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 
 .user-name {
@@ -476,3 +480,44 @@ body {
     margin: 16px;
   }
 }
+
+/* ========== X/O Game Styles ========== */
+.conv-game-area {
+  padding: 8px 0;
+}
+.xo-board {
+  display: grid;
+  grid-template-columns: repeat(3, 84px);
+  grid-gap: 8px;
+}
+.xo-cell {
+  width: 84px;
+  height: 84px;
+  background: #fff;
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 34px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+}
+.xo-cell:hover { transform: scale(1.03); }
+.xo-cell.x { color: var(--primary-color); }
+.xo-cell.o { color: var(--danger-color); }
+.xo-cell.win { box-shadow: 0 6px 18px rgba(0,0,0,0.12); border-color: gold; background: linear-gradient(180deg, #fff8e1, #fff4d6); }
+.conv-game-info { font-size: 13px; color: var(--text-secondary); margin-bottom:6px }
+
+/* Toast / notification */
+.toast {
+  background: rgba(0,0,0,0.8);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.2);
+  font-size: 13px;
+}
+

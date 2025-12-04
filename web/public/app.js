@@ -279,6 +279,8 @@ function renderUsers(arr) {
   const usersList = document.querySelector(".users-list")
   usersList.innerHTML = ""
   arr.forEach((u) => {
+    // do not show current user in the All Users list
+    if (u === myNick) return
     const div = document.createElement("div")
     div.style.display = "flex"
     div.style.justifyContent = "space-between"
@@ -361,79 +363,97 @@ function storePrivateMessage(from, to, text) {
 
 // --- X/O (Tic-Tac-Toe) game handling ---
 function handleXoMessage(from, to, payload) {
-  // payload format: GAME::XO::ACTION::DATA?
+  console.log('[game] handleXoMessage from=', from, 'to=', to, 'payload=', payload)
+  // payload format: GAME::XO::ACTION::DATA...
   const parts = payload.split('::')
   const action = parts[2]
-  const data = parts[3] || ''
+  const rest = parts.slice(3).join('::') || ''
   const partner = (from === myNick) ? to : from
   const key = getConvKey(myNick, partner)
   if (!games[key]) games[key] = { board: [['','',''],['','',''],['','','']], mySymbol: null, theirSymbol: null, turn: null, started: false }
   const g = games[key]
   if (action === 'CHALLENGE') {
-    const accept = confirm(`${from} challenged you to play X/O. Accept?`)
-    if (accept) {
-      // acceptor becomes O, challenger is X and starts
-      sendGameMessage(from, 'ACCEPT')
-      g.started = true
-      g.mySymbol = 'O'
-      g.theirSymbol = 'X'
-      g.turn = from // challenger starts
+    // legacy: direct challenge without gameId
+    console.log('[game] CHALLENGE legacy for partner=', partner, 'from=', from)
+    showChallengeUI(partner, from, '')
+  } else if (action === 'INVITE') {
+    // server invite includes gid::inviter
+    const inviteParts = rest.split('::')
+    const gid = inviteParts[0] || ''
+    const inviter = inviteParts[1] || from
+    console.log('[game] INVITE gid=', gid, 'from=', inviter)
+    g.id = gid
+    showChallengeUI(partner, inviter, gid)
+  } else if (action === 'STATE') {
+    // server authoritative state: rest is JSON
+    try {
+      const state = JSON.parse(rest)
+      if (!games[key]) games[key] = { board: [['','',''],['','',''],['','','']], mySymbol: null, theirSymbol: null, turn: null, started: false }
+      const gg = games[key]
+      gg.id = state.gameId
+      gg.turn = state.turn
+      gg.started = true
+      gg.mySymbol = state.you
+      gg.theirSymbol = (state.you === 'X') ? 'O' : 'X'
+      if (Array.isArray(state.board)) {
+        for (let i=0;i<3;i++) for (let j=0;j<3;j++) gg.board[i][j] = state.board[i*3 + j] || ''
+      }
+      try { openConversation(partner) } catch(e) {}
       showXoBoard(partner)
-      storePrivateMessage(from, to, `(game) accepted X/O with ${from}`)
-    } else {
-      sendGameMessage(from, 'DECLINE')
-      storePrivateMessage(from, to, `(game) declined X/O from ${from}`)
-    }
+      renderXoBoard(key)
+      // defensive check: sometimes the DOM may be in a transient state (race) and the board
+      // might get cleared by another render step. If convGameArea is empty shortly after
+      // STATE processing, retry rendering once more and log diagnostics to help debug.
+      try {
+        const area = document.getElementById('convGameArea')
+        console.log('[game] STATE processed — convGameArea children=', area ? area.children.length : 'MISSING')
+        setTimeout(() => {
+          try {
+            const a2 = document.getElementById('convGameArea')
+            if (gg.started && a2 && a2.children.length === 0) {
+              console.warn('[game] convGameArea empty after STATE render — retrying showXoBoard/renderXoBoard')
+              showXoBoard(partner)
+              renderXoBoard(key)
+            }
+          } catch(e) { console.warn('[game] retry render failed', e) }
+        }, 120)
+      } catch(e) { console.warn('[game] post-STATE diagnostic failed', e) }
+    } catch(e) { console.warn('failed parsing STATE', e) }
   } else if (action === 'ACCEPT') {
-    // challenger receives ACCEPT -> initialize as X and start
+    // fallback compatibility: start locally (server should send STATE)
+    console.log('[game] ACCEPT received for partner=', partner, 'from=', from)
     g.started = true
     g.mySymbol = 'X'
     g.theirSymbol = 'O'
-    g.turn = myNick // challenger starts
+    g.turn = myNick
+    try { openConversation(partner) } catch(e) {}
     showXoBoard(partner)
     storePrivateMessage(from, to, `(game) ${from} accepted X/O`)
   } else if (action === 'DECLINE') {
     storePrivateMessage(from, to, `(game) ${from} declined X/O`)
   } else if (action === 'MOVE') {
-    // data contains move "r,c"
-    const parts2 = data.split(',')
-    const r = parseInt(parts2[0], 10)
-    const c = parseInt(parts2[1], 10)
-    if (!isNaN(r) && !isNaN(c) && r>=0 && r<3 && c>=0 && c<3) {
-      const sym = (from === myNick) ? g.mySymbol : g.theirSymbol
-      if (g.board[r][c] === '') {
-        g.board[r][c] = sym
-        renderXoBoard(key)
-        // check win/draw
-        const winner = checkWin(g.board)
-        if (winner) {
-          const winnerNick = (winner === g.mySymbol) ? myNick : partner
-          storePrivateMessage(myNick, partner, `(game) ${winnerNick} wins`)
-          // notify end
-          sendGameMessage(partner, 'END', `WIN::${winnerNick}`)
-          games[key].started = false
-        } else if (isBoardFull(g.board)) {
-          storePrivateMessage(myNick, partner, `(game) draw`)
-          sendGameMessage(partner, 'END', 'DRAW')
-          games[key].started = false
-        } else {
-          // switch turn
-          g.turn = (g.turn === myNick) ? partner : myNick
-        }
-      }
-    }
+    // moves are handled by server-authoritative broker; ignore client-side MOVE payloads
+    console.log('[game] MOVE received (client-side) ignored; awaiting STATE from server')
   } else if (action === 'END') {
-    // data can be WIN::nick or DRAW or QUIT
-    if (data.startsWith('WIN::')) {
-      const winnerNick = data.split('::')[1]
+    console.log('[game] END received data=', rest)
+    const reststr = rest || ''
+    if (reststr.startsWith('WIN::')) {
+      const restParts = reststr.split('::')
+      const winnerNick = restParts[1]
+      const winLineJson = restParts.slice(2).join('::') || ''
       storePrivateMessage(myNick, partner, `(game) ${winnerNick} wins`)
-    } else if (data === 'DRAW') {
+      try {
+        if (winLineJson) {
+          const ln = JSON.parse(winLineJson)
+          games[key].winLine = ln
+        }
+      } catch(e) { /* ignore */ }
+    } else if (reststr === 'DRAW') {
       storePrivateMessage(myNick, partner, `(game) draw`)
-    } else if (data.startsWith('QUIT::')) {
-      const quitter = data.split('::')[1]
+    } else if (reststr.startsWith('QUIT::')) {
+      const quitter = reststr.split('::')[1]
       storePrivateMessage(myNick, partner, `(game) ${quitter} quit the game`)
     }
-    // cleanup UI/state
     games[key].started = false
     const area = document.getElementById('convGameArea')
     if (area) area.innerHTML = ''
@@ -441,60 +461,44 @@ function handleXoMessage(from, to, payload) {
 }
 
 function showXoBoard(partner) {
+  console.log('[game] showXoBoard for partner=', partner, 'myNick=', myNick)
   const key = getConvKey(myNick, partner)
   const g = games[key]
   if (!g) return
   const area = document.getElementById('convGameArea')
   area.innerHTML = ''
   const info = document.createElement('div')
-  info.style.marginBottom = '6px'
+  info.id = 'convGameInfo'
+  info.className = 'conv-game-info'
   info.textContent = `Game: you=${g.mySymbol} opponent=${g.theirSymbol} | turn: ${g.turn}`
   area.appendChild(info)
   const board = document.createElement('div')
-  board.style.display = 'grid'
-  board.style.gridTemplateColumns = 'repeat(3, 80px)'
-  board.style.gridGap = '6px'
+  board.className = 'xo-board'
   for (let r=0;r<3;r++){
     for (let c=0;c<3;c++){
       const cell = document.createElement('button')
-      cell.style.width = '80px'
-      cell.style.height = '80px'
-      cell.style.fontSize = '28px'
+      cell.className = 'xo-cell'
       cell.dataset.r = r
       cell.dataset.c = c
       cell.textContent = g.board[r][c] || ''
       cell.onclick = () => {
-        // only allow move if game started and it's our turn and cell empty
+        console.log('[game] cell click', r, c, 'g.turn=', g.turn, 'myNick=', myNick, 'cellVal=', g.board[r][c])
         if (!g.started) return
         if (g.turn !== myNick) return alert('Not your turn')
         if (g.board[r][c] !== '') return
-        // play locally and send move
-        g.board[r][c] = g.mySymbol
-        renderXoBoard(key)
-        sendGameMessage(partner, 'MOVE', `${r},${c}`)
-        // check win/draw locally
-        const winner = checkWin(g.board)
-        if (winner) {
-          const winnerNick = (winner === g.mySymbol) ? myNick : partner
-          storePrivateMessage(myNick, partner, `(game) ${winnerNick} wins`)
-          sendGameMessage(partner, 'END', `WIN::${winnerNick}`)
-          g.started = false
-          area.innerHTML = ''
-          return
-        }
-        if (isBoardFull(g.board)) {
-          storePrivateMessage(myNick, partner, `(game) draw`)
-          sendGameMessage(partner, 'END', 'DRAW')
-          g.started = false
-          area.innerHTML = ''
-          return
-        }
-        g.turn = partner
+        if (!g.id) return alert('Game id missing')
+        sendGameMessage(partner, 'MOVE', `${g.id}::${r},${c}`)
+        try { const btns = area.querySelectorAll('.xo-cell'); btns.forEach(b=>{ b.disabled = true; b.style.cursor = 'not-allowed' }) } catch(e) {}
       }
       board.appendChild(cell)
     }
   }
   area.appendChild(board)
+  // initial enable/disable based on turn
+  try {
+    const buttons = area.querySelectorAll('.xo-cell')
+    buttons.forEach(b => { b.disabled = (g.turn !== myNick); b.style.cursor = (g.turn === myNick ? 'pointer' : 'not-allowed') })
+  } catch(e) {}
   const btnQuit = document.createElement('button')
   btnQuit.textContent = 'Quit Game'
   btnQuit.style.marginTop = '8px'
@@ -508,6 +512,7 @@ function showXoBoard(partner) {
 }
 
 function renderXoBoard(key) {
+  console.log('[game] renderXoBoard key=', key)
   // re-render the board UI for conversation key
   const partner = key.replace('chat_','').split('__').filter(Boolean).find(x => x !== myNick)
   const area = document.getElementById('convGameArea')
@@ -520,7 +525,24 @@ function renderXoBoard(key) {
     const r = parseInt(b.dataset.r,10)
     const c = parseInt(b.dataset.c,10)
     b.textContent = g.board[r][c] || ''
+    b.classList.remove('x','o','win')
+    if (g.board[r][c] === 'X') b.classList.add('x')
+    if (g.board[r][c] === 'O') b.classList.add('o')
+    // highlight winning line
+    if (g.winLine && Array.isArray(g.winLine)) {
+      for (const p of g.winLine) {
+        if (p[0] === r && p[1] === c) b.classList.add('win')
+      }
+    }
   })
+  // update game info (turn) if present
+  try {
+    const info = document.getElementById('convGameInfo')
+    if (info) info.textContent = `Game: you=${g.mySymbol} opponent=${g.theirSymbol} | turn: ${g.turn}`
+    // enable/disable cells depending on current turn
+    const buttons2 = document.querySelectorAll('.xo-cell')
+    buttons2.forEach(b => { b.disabled = (g.turn !== myNick); b.style.cursor = (g.turn === myNick ? 'pointer' : 'not-allowed') })
+  } catch(e) {}
 }
 
 function checkWin(b) {
@@ -533,9 +555,24 @@ function checkWin(b) {
     const a = b[ln[0][0]][ln[0][1]]
     const c = b[ln[1][0]][ln[1][1]]
     const d = b[ln[2][0]][ln[2][1]]
-    if (a && a === c && a === d) return a
+    if (a && a === c && a === d) return { symbol: a, line: ln }
   }
   return null
+}
+
+// simple toast helper to show transient messages in notifications area (or body fallback)
+function showToast(text, timeout=4000) {
+  try {
+    const id = 'toast_' + Date.now() + '_' + Math.floor(Math.random()*1000)
+    const t = document.createElement('div')
+    t.id = id
+    t.className = 'toast'
+    t.textContent = text
+    // prefer notificationsEl if present
+    if (notificationsEl) notificationsEl.appendChild(t)
+    else document.body.appendChild(t)
+    setTimeout(() => { const el = document.getElementById(id); if (el) el.remove() }, timeout)
+  } catch(e) { console.warn('toast failed', e) }
 }
 
 function isBoardFull(b) {
@@ -565,9 +602,18 @@ function renderConversation(partner) {
     el.appendChild(p);
   });
   el.scrollTop = el.scrollHeight;
-  // clear any game UI when rendering history
+  // if there is an ongoing game for this conversation, show the board; otherwise clear game UI
   const area = document.getElementById('convGameArea')
-  if (area) area.innerHTML = ''
+  try {
+    const g = games[key]
+    if (g && g.started) {
+      // ensure the board UI is present and up-to-date
+      showXoBoard(partner)
+      renderXoBoard(key)
+    } else {
+      if (area) area.innerHTML = ''
+    }
+  } catch(e) { if (area) area.innerHTML = '' }
 }
 
 document.getElementById("sendConv").onclick = () => {
@@ -623,6 +669,7 @@ const games = {} // key -> { state: 'challenged'|'playing', myMove, theirMove }
 function sendGameMessage(partner, action, data) {
   // use TEXT so broker will forward as MSG; encode as GAME::XO::ACTION::DATA
   const payload = `GAME::XO::${action}${data ? '::'+data : ''}`
+  console.log('[game] sendGameMessage to=', partner, 'payload=', payload)
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'publish', toType: 'USER', target: partner, kind: 'TEXT', payload }))
   }
@@ -667,6 +714,75 @@ function showNotificationImage(from, fname, b64) {
   } catch(e) { console.warn('failed creating notification', e) }
 }
 
+function showChallengeUI(partner, from, gid) {
+  try {
+    const id = 'chal_' + Date.now() + '_' + Math.floor(Math.random()*1000)
+    const wrap = document.createElement('div')
+    wrap.id = id
+    wrap.style.background = '#fff'
+    wrap.style.border = '1px solid #cfc'
+    wrap.style.padding = '8px'
+    wrap.style.marginBottom = '8px'
+    wrap.style.boxShadow = '0 2px 6px rgba(0,0,0,0.05)'
+    wrap.style.width = '240px'
+    const txt = document.createElement('div')
+    txt.textContent = `${from} invites you to play X/O` 
+    wrap.appendChild(txt)
+    const btnAccept = document.createElement('button')
+    btnAccept.textContent = 'Accept'
+    btnAccept.style.marginRight = '6px'
+    // if gid is empty, disable Accept and show a helpful hint to the user
+    if (!gid) {
+      btnAccept.disabled = true
+      btnAccept.textContent = 'Chờ server...'
+      const hint = document.createElement('div')
+      hint.style.fontSize = '12px'
+      hint.style.color = '#666'
+      hint.style.marginTop = '6px'
+      hint.textContent = 'Đang chờ server tạo trò chơi — chờ lời mời chính thức.'
+      wrap.appendChild(hint)
+    }
+
+    btnAccept.onclick = () => {
+      // send accept to challenger (include game id if provided)
+      sendGameMessage(from, 'ACCEPT', gid || '')
+      // initialize game state locally (will be overwritten when server sends STATE)
+      const key = getConvKey(myNick, from)
+      games[key] = { board: [['','',''],['','',''],['','','']], mySymbol: 'O', theirSymbol: 'X', turn: from, started: true, id: gid || '' }
+      // open conversation and show board
+      openConversation(from)
+      showXoBoard(from)
+      // store acceptance message (from: me -> to: challenger)
+      storePrivateMessage(myNick, from, `(game) accepted X/O with ${from}`)
+      const el = document.getElementById(id); if (el) el.remove()
+    }
+    const btnDecline = document.createElement('button')
+    btnDecline.textContent = 'Decline'
+    btnDecline.onclick = () => {
+      sendGameMessage(from, 'DECLINE', gid || '')
+      storePrivateMessage(from, myNick, `(game) declined X/O from ${from}`)
+      const el = document.getElementById(id); if (el) el.remove()
+    }
+    const ctl = document.createElement('div')
+    ctl.style.marginTop = '8px'
+    ctl.appendChild(btnAccept)
+    ctl.appendChild(btnDecline)
+    wrap.appendChild(ctl)
+
+    // if conversation with 'from' is open, show inline in convGameArea
+    const current = document.getElementById('convHeader') && document.getElementById('convHeader').dataset.partner
+    if (current === from) {
+      const area = document.getElementById('convGameArea')
+      if (area) area.appendChild(wrap)
+    } else {
+      // show in notifications so user can interact even if tab not focused
+      notificationsEl.appendChild(wrap)
+      // auto-remove after 60s
+      setTimeout(() => { const el = document.getElementById(id); if (el) el.remove() }, 60000)
+    }
+  } catch(e) { console.warn('failed showing challenge UI', e) }
+}
+
 function appendGroupMessage(text) {
   // text format: [from -> target] payload  or [FILE from from] name
   const m = document.createElement('div')
@@ -706,8 +822,8 @@ sendGroup.onclick = () => {
       const payload = f.name + "::" + b64
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "publish", toType: "GROUP", target: "main", kind: "FILE", payload }))
-        // show the sent file inline for the sender (image preview + download)
-        appendGroupFile(myNick, 'main', f.name, b64)
+        // do not append locally: broker will forward group messages to all clients
+        // including the sender. Avoid double-display by waiting for the broker echo.
       } else {
         alert('Not connected to server');
       }
@@ -719,8 +835,7 @@ sendGroup.onclick = () => {
   if (txt) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "publish", toType: "GROUP", target: "main", kind: "TEXT", payload: txt }))
-      // immediately append local message so sender sees it without waiting for broker echo
-      appendGroupMessage(`[${myNick} -> main] ${txt}`)
+      // do not append locally; wait for broker to echo the group message back to all clients
     } else {
       alert('Not connected to server');
     }

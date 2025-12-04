@@ -12,6 +12,7 @@
 #endif
 
 #include <iostream>
+#include <array>
 #include <thread>
 #include <mutex>
 #include <unordered_map>
@@ -38,6 +39,44 @@ using sock_t = int;
 
 static mutex g_mutex;
 static unordered_map<string, sock_t> g_clients; // nickname -> socket
+// Game manager for authoritative X/O games
+struct Game {
+    string id;
+    string a; // challenger
+    string b; // accepter
+    char board[3][3];
+    string turn; // nick whose turn
+    bool started;
+    string winner;
+};
+
+static unordered_map<string, Game> g_games; // gameId -> Game
+static int g_game_counter = 1;
+
+// helper to create a new game id
+string make_game_id() {
+    return string("g") + to_string(g_game_counter++);
+}
+
+// check win; returns winning symbol 'X' or 'O' or '\0'; also fills line indexes if win
+char check_win_char(char b[3][3], vector<pair<int,int>>& line) {
+    vector<array<pair<int,int>,3>> lines = {
+        array<pair<int,int>,3>{{{0,0},{0,1},{0,2}}}, array<pair<int,int>,3>{{{1,0},{1,1},{1,2}}}, array<pair<int,int>,3>{{{2,0},{2,1},{2,2}}},
+        array<pair<int,int>,3>{{{0,0},{1,0},{2,0}}}, array<pair<int,int>,3>{{{0,1},{1,1},{2,1}}}, array<pair<int,int>,3>{{{0,2},{1,2},{2,2}}},
+        array<pair<int,int>,3>{{{0,0},{1,1},{2,2}}}, array<pair<int,int>,3>{{{0,2},{1,1},{2,0}}}
+    };
+    for (auto &ln : lines) {
+        char a = b[ln[0].first][ln[0].second];
+        char c = b[ln[1].first][ln[1].second];
+        char d = b[ln[2].first][ln[2].second];
+        if (a && a == c && a == d) {
+            line.clear();
+            line.push_back(ln[0]); line.push_back(ln[1]); line.push_back(ln[2]);
+            return a;
+        }
+    }
+    return '\0';
+}
 
 // send_all: đảm bảo gửi đủ bytes
 bool send_all(sock_t s, const char* data, size_t len) {
@@ -162,6 +201,182 @@ void handle_client(sock_t client_socket) {
                          << " target=" << target << " kind=" << kind << "\n";
 
                     lock_guard<mutex> lk(g_mutex);
+                    // If payload is a GAME command, handle authoritative game logic here
+                    if (kind == "TEXT" && payload.rfind("GAME::XO::", 0) == 0 && to_type == "USER") {
+                        // parse GAME payload parts
+                        // format: GAME::XO::ACTION::DATA...
+                        // We'll locate the separators explicitly so `data` is the substring after
+                        // the third '::' (if present), and `action` is the 3rd segment.
+                        string action;
+                        string data = "";
+                        size_t p1 = payload.find("::");
+                        if (p1 != string::npos) {
+                            size_t p2 = payload.find("::", p1 + 2);
+                            if (p2 != string::npos) {
+                                // find third separator (may not exist)
+                                size_t p3 = payload.find("::", p2 + 2);
+                                // action is between p2+2 and p3 (or end)
+                                if (p3 != string::npos) {
+                                    action = payload.substr(p2 + 2, p3 - (p2 + 2));
+                                    data = payload.substr(p3 + 2);
+                                } else {
+                                    action = payload.substr(p2 + 2);
+                                    data = "";
+                                }
+                            }
+                        }
+
+                        if (action == "CHALLENGE") {
+                            // create game and send INVITE to target with game id
+                            string gid = make_game_id();
+                            Game G;
+                            G.id = gid; G.a = from; G.b = target; G.started = false; G.winner = ""; G.turn = "";
+                            for (int i=0;i<3;i++) for (int j=0;j<3;j++) G.board[i][j] = 0;
+                            g_games[gid] = G;
+                            // send INVITE message to target: MSG|from|USER|target|GAME::XO::INVITE::gid::from
+                            auto it = g_clients.find(target);
+                            if (it != g_clients.end()) {
+                                string out = "MSG|" + from + "|USER|" + target + "|GAME::XO::INVITE::" + gid + "::" + from;
+                                send_line(it->second, out);
+                                cerr << "[server] sent INVITE " << gid << " to " << target << "\n";
+                            } else {
+                                cerr << "[server] target NOT FOUND for INVITE: " << target << "\n";
+                            }
+                            // also send ACK to challenger (optional)
+                            auto itf = g_clients.find(from);
+                            if (itf != g_clients.end()) send_line(itf->second, "MSG|server|USER|" + from + "|GAME::XO::CHALLENGE_SENT::" + gid);
+                            continue; // handled
+                        } else if (action == "ACCEPT") {
+                                // data should be game id
+                                string gid = data;
+                                // If gid not provided (legacy client), try to locate a pending game
+                                // where challenger (a) == target and accepter (b) == from
+                                if (gid.empty()) {
+                                    for (auto &pg : g_games) {
+                                        if (pg.second.a == target && pg.second.b == from && !pg.second.started) {
+                                            gid = pg.first;
+                                            break;
+                                        }
+                                    }
+                                    if (gid.empty()) { cerr << "[server] ACCEPT missing game id and no pending game found\n"; continue; }
+                                }
+                                auto git = g_games.find(gid);
+                                if (git == g_games.end()) { cerr << "[server] ACCEPT unknown gid " << gid << "\n"; continue; }
+                            Game &G = git->second;
+                            // ensure acceptor is target
+                            if (from != G.b) {
+                                cerr << "[server] ACCEPT from unexpected user " << from << " expected " << G.b << "\n";
+                                continue;
+                            }
+                            // start game: challenger=A is X, accepter=B is O, turn = challenger
+                            G.started = true;
+                            G.turn = G.a;
+                            // send STATE to both players (as JSON payload)
+                            // JSON: {"gameId":"gid","board":["","",...],"turn":"nick","you":"X"}
+                            auto make_state = [&](const string &nick)->string{
+                                string s = "{";
+                                s += "\"gameId\":\"" + gid + "\",";
+                                s += "\"board\":[";
+                                for (int i=0;i<3;i++) for (int j=0;j<3;j++) {
+                                    string cell = "\"";
+                                    if (G.board[i][j]) cell = string("\"") + G.board[i][j] + string("\"");
+                                    else cell = string("\"\"");
+                                    s += cell;
+                                    if (!(i==2 && j==2)) s += ",";
+                                }
+                                s += "],";
+                                s += "\"turn\":\"" + G.turn + "\",";
+                                // you symbol
+                                string you = (nick == G.a) ? string("X") : string("O");
+                                s += "\"you\":\"" + you + "\"";
+                                s += "}";
+                                return s;
+                            };
+                            auto ita = g_clients.find(G.a);
+                            auto itb = g_clients.find(G.b);
+                            if (ita != g_clients.end()) send_line(ita->second, "MSG|server|USER|" + G.a + "|GAME::XO::STATE::" + make_state(G.a));
+                            if (itb != g_clients.end()) send_line(itb->second, "MSG|server|USER|" + G.b + "|GAME::XO::STATE::" + make_state(G.b));
+                            cerr << "[server] started game " << gid << " between " << G.a << " and " << G.b << "\n";
+                            continue;
+                        } else if (action == "MOVE") {
+                            // data expected: gid::r,c
+                            size_t p = data.find("::");
+                            if (p == string::npos) { cerr << "[server] MOVE malformed\n"; continue; }
+                            string gid = data.substr(0,p);
+                            string rc = data.substr(p+2);
+                            auto git = g_games.find(gid);
+                            if (git == g_games.end()) { cerr << "[server] MOVE unknown gid " << gid << "\n"; continue; }
+                            Game &G = git->second;
+                            if (!G.started) { cerr << "[server] MOVE but game not started\n"; continue; }
+                            if (from != G.turn) { cerr << "[server] MOVE wrong turn from " << from << " expected " << G.turn << "\n"; continue; }
+                            int r=-1,c=-1;
+                            if (sscanf(rc.c_str(), "%d,%d", &r, &c) != 2) { cerr << "[server] MOVE parse failed\n"; continue; }
+                            if (r<0||r>2||c<0||c>2) { cerr << "[server] MOVE out of range\n"; continue; }
+                            if (G.board[r][c]) { cerr << "[server] MOVE cell occupied\n"; continue; }
+                            char sym = (from == G.a) ? 'X' : 'O';
+                            G.board[r][c] = sym;
+                            // check win or draw
+                            vector<pair<int,int>> wline;
+                            char w = check_win_char(G.board, wline);
+                            if (w) {
+                                G.started = false;
+                                G.winner = (w == 'X') ? G.a : G.b;
+                                // send END::WIN::nick::[line_json]
+                                // create line json: [[r,c],...]
+                                string linejson = "[";
+                                for (size_t i=0;i<wline.size();i++) {
+                                    linejson += "[" + to_string(wline[i].first) + "," + to_string(wline[i].second) + "]";
+                                    if (i+1<wline.size()) linejson += ",";
+                                }
+                                linejson += "]";
+                                auto ita2 = g_clients.find(G.a);
+                                auto itb2 = g_clients.find(G.b);
+                                string payload = "GAME::XO::END::WIN::" + G.winner + "::" + linejson;
+                                if (ita2!=g_clients.end()) send_line(ita2->second, "MSG|server|USER|" + G.a + "|" + payload);
+                                if (itb2!=g_clients.end()) send_line(itb2->second, "MSG|server|USER|" + G.b + "|" + payload);
+                                cerr << "[server] game " << gid << " won by " << G.winner << "\n";
+                            } else {
+                                // check draw
+                                bool full=true; for (int i=0;i<3;i++) for (int j=0;j<3;j++) if (!G.board[i][j]) full=false;
+                                if (full) {
+                                    G.started = false;
+                                    auto ita2 = g_clients.find(G.a);
+                                    auto itb2 = g_clients.find(G.b);
+                                    string payload = "GAME::XO::END::DRAW";
+                                    if (ita2!=g_clients.end()) send_line(ita2->second, "MSG|server|USER|" + G.a + "|" + payload);
+                                    if (itb2!=g_clients.end()) send_line(itb2->second, "MSG|server|USER|" + G.b + "|" + payload);
+                                    cerr << "[server] game " << gid << " draw\n";
+                                } else {
+                                    // switch turn and send STATE to both
+                                    G.turn = (G.turn == G.a) ? G.b : G.a;
+                                    auto make_state2 = [&](const string &nick)->string{
+                                        string s = "{";
+                                        s += "\"gameId\":\"" + gid + "\",";
+                                        s += "\"board\":[";
+                                        for (int i=0;i<3;i++) for (int j=0;j<3;j++) {
+                                            string cell = "\"";
+                                            if (G.board[i][j]) cell = string("\"") + G.board[i][j] + string("\"");
+                                            else cell = string("\"\"");
+                                            s += cell;
+                                            if (!(i==2 && j==2)) s += ",";
+                                        }
+                                        s += "],";
+                                        s += "\"turn\":\"" + G.turn + "\",";
+                                        string you = (nick == G.a) ? string("X") : string("O");
+                                        s += "\"you\":\"" + you + "\"";
+                                        s += "}";
+                                        return s;
+                                    };
+                                    auto ita3 = g_clients.find(G.a);
+                                    auto itb3 = g_clients.find(G.b);
+                                    if (ita3!=g_clients.end()) send_line(ita3->second, "MSG|server|USER|" + G.a + "|GAME::XO::STATE::" + make_state2(G.a));
+                                    if (itb3!=g_clients.end()) send_line(itb3->second, "MSG|server|USER|" + G.b + "|GAME::XO::STATE::" + make_state2(G.b));
+                                }
+                            }
+                            continue;
+                        }
+                        // fallback: not handled here
+                    }
                     if (to_type == "GROUP") {
                         for (auto &p : g_clients) {
                             // send to all clients including the sender so everyone's UI (including sender) shows the group message
@@ -248,8 +463,14 @@ int main() {
     addr.sin_port = htons(port);
 
     if (bind(listen_sock, (sockaddr*)&addr, sizeof(addr)) == -1) {
-        cerr << "Bind failed\n";
-        return 1;
+    // print platform-specific error to help debugging (port in use, permissions, etc.)
+#ifdef _WIN32
+    int err = WSAGetLastError();
+    cerr << "Bind failed: WSA error " << err << "\n";
+#else
+    cerr << "Bind failed: " << strerror(errno) << " (" << errno << ")\n";
+#endif
+    return 1;
     }
 
     if (listen(listen_sock, 10) == -1) {
